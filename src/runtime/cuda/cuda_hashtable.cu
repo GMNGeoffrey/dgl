@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /**
  *  Copyright (c) 2021 by Contributors
  * @file runtime/cuda/cuda_device_common.cuh
@@ -5,7 +6,7 @@
  */
 
 #include <cassert>
-#include <cub/cub.cuh>  // NOLINT
+#include <hipcub/hipcub.hpp>  // NOLINT
 
 #include "../../array/cuda/atomic.cuh"
 #include "cuda_common.h"
@@ -54,7 +55,7 @@ class MutableDeviceOrderedHashTable : public DeviceOrderedHashTable<IdType> {
    * @return The mapping.
    */
   inline __device__ Iterator Search(const IdType id) {
-    const IdType pos = SearchForPosition(id);
+    const IdType pos = this->SearchForPosition(id);
 
     return GetMutable(pos);
   }
@@ -95,12 +96,12 @@ class MutableDeviceOrderedHashTable : public DeviceOrderedHashTable<IdType> {
    * @return An iterator to inserted mapping.
    */
   inline __device__ Iterator Insert(const IdType id, const size_t index) {
-    size_t pos = Hash(id);
+    size_t pos = this->Hash(id);
 
     // linearly scan for an empty slot or matching entry
     IdType delta = 1;
     while (!AttemptInsertAt(pos, id, index)) {
-      pos = Hash(pos + delta);
+      pos = this->Hash(pos + delta);
       delta += 1;
     }
 
@@ -246,7 +247,7 @@ __global__ void count_hashmap(
     DeviceOrderedHashTable<IdType> table, IdType* const num_unique) {
   assert(BLOCK_SIZE == blockDim.x);
 
-  using BlockReduce = typename cub::BlockReduce<IdType, BLOCK_SIZE>;
+  using BlockReduce = typename hipcub::BlockReduce<IdType, BLOCK_SIZE>;
   using Mapping = typename DeviceOrderedHashTable<IdType>::Mapping;
 
   const size_t block_start = TILE_SIZE * blockIdx.x;
@@ -300,7 +301,7 @@ __global__ void compact_hashmap(
   assert(BLOCK_SIZE == blockDim.x);
 
   using FlagType = uint16_t;
-  using BlockScan = typename cub::BlockScan<FlagType, BLOCK_SIZE>;
+  using BlockScan = typename hipcub::BlockScan<FlagType, BLOCK_SIZE>;
   using Mapping = typename DeviceOrderedHashTable<IdType>::Mapping;
 
   constexpr const int32_t VALS_PER_THREAD = TILE_SIZE / BLOCK_SIZE;
@@ -359,7 +360,7 @@ DeviceOrderedHashTable<IdType> OrderedHashTable<IdType>::DeviceHandle() const {
 
 template <typename IdType>
 OrderedHashTable<IdType>::OrderedHashTable(
-    const size_t size, DGLContext ctx, cudaStream_t stream, const int scale)
+    const size_t size, DGLContext ctx, hipStream_t stream, const int scale)
     : table_(nullptr), size_(TableSize(size, scale)), ctx_(ctx) {
   // make sure we will at least as many buckets as items.
   CHECK_GT(scale, 0);
@@ -368,7 +369,7 @@ OrderedHashTable<IdType>::OrderedHashTable(
   table_ = static_cast<Mapping*>(
       device->AllocWorkspace(ctx_, sizeof(Mapping) * size_));
 
-  CUDA_CALL(cudaMemsetAsync(
+  CUDA_CALL(hipMemsetAsync(
       table_, DeviceOrderedHashTable<IdType>::kEmptyKey,
       sizeof(Mapping) * size_, stream));
 }
@@ -382,7 +383,7 @@ OrderedHashTable<IdType>::~OrderedHashTable() {
 template <typename IdType>
 void OrderedHashTable<IdType>::FillWithDuplicates(
     const IdType* const input, const size_t num_input, IdType* const unique,
-    int64_t* const num_unique, cudaStream_t stream) {
+    int64_t* const num_unique, hipStream_t stream) {
   auto device = runtime::DeviceAPI::Get(ctx_);
 
   const int64_t num_tiles = (num_input + TILE_SIZE - 1) / TILE_SIZE;
@@ -404,12 +405,12 @@ void OrderedHashTable<IdType>::FillWithDuplicates(
       input, num_input, device_table, item_prefix);
 
   size_t workspace_bytes;
-  CUDA_CALL(cub::DeviceScan::ExclusiveSum(
+  CUDA_CALL(hipcub::DeviceScan::ExclusiveSum(
       nullptr, workspace_bytes, static_cast<IdType*>(nullptr),
       static_cast<IdType*>(nullptr), grid.x + 1, stream));
   void* workspace = device->AllocWorkspace(ctx_, workspace_bytes);
 
-  CUDA_CALL(cub::DeviceScan::ExclusiveSum(
+  CUDA_CALL(hipcub::DeviceScan::ExclusiveSum(
       workspace, workspace_bytes, item_prefix, item_prefix, grid.x + 1,
       stream));
   device->FreeWorkspace(ctx_, workspace);
@@ -422,7 +423,7 @@ void OrderedHashTable<IdType>::FillWithDuplicates(
 
 template <typename IdType>
 void OrderedHashTable<IdType>::FillWithUnique(
-    const IdType* const input, const size_t num_input, cudaStream_t stream) {
+    const IdType* const input, const size_t num_input, hipStream_t stream) {
   const int64_t num_tiles = (num_input + TILE_SIZE - 1) / TILE_SIZE;
 
   const dim3 grid(num_tiles);

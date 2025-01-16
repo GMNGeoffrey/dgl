@@ -55,7 +55,6 @@ fi
 shift $(($OPTIND-1))
 
 export DGLBACKEND=pytorch
-export DGL_LIBRARY_PATH=${DGL_HOME}/build
 export PYTHONPATH=${DGL_HOME}/python:${DGL_HOME}/tests:${DGL_HOME}/tests/python/pytorch/graphbolt:$PYTHONPATH
 export DGLTESTDEV=${device}
 export DGL_DOWNLOAD_DIR=${DGL_HOME}/_download
@@ -66,4 +65,5 @@ if [[ -z $@ ]]; then
   exit 1
 fi
 
-python3 -m pytest -v $@
+set -x
+python3 -m pytest -v "$@"

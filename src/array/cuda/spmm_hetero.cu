@@ -41,12 +41,12 @@ void SpMMCsrHetero(
   if (NULL != std::getenv("USE_DETERMINISTIC_ALG"))
     use_deterministic_alg_only = true;
 
+  // legacy cuSPARSE does not care about NNZ, hence the argument "false".
   bool use_legacy_cusparsemm =
-      (CUDART_VERSION < 11000) && (reduce == "sum") &&
-      // legacy cuSPARSE does not care about NNZ, hence the argument "false".
-      ((op == "copy_lhs" && cusparse_available<DType, IdType>(false)) ||
-       (op == "mul" && is_scalar_efeat &&
-        cusparse_available<DType, IdType>(false)));
+      CUSPARSE_IS_LEGACY && (reduce == "sum") &&
+      cusparse_available<DType, IdType>(false) &&
+      (op == "copy_lhs" || (op == "mul" && is_scalar_efeat));
+
   // Create temporary output buffer to store non-transposed output
   if (use_legacy_cusparsemm) {
     for (dgl_type_t ntype = 0; ntype < (*vec_out).size(); ++ntype) {
@@ -55,7 +55,7 @@ void SpMMCsrHetero(
       if (m == 0) continue;
       DType* out = static_cast<DType*>(device->AllocWorkspace(
           vec_csr[0].indptr->ctx, m * n * sizeof(DType)));
-      CUDA_CALL(cudaMemset(out, 0, m * n * sizeof(DType)));
+      CUDA_CALL(hipMemset(out, 0, m * n * sizeof(DType)));
       trans_out[ntype] = out;
     }
   }
@@ -116,7 +116,7 @@ void SpMMCsrHetero(
     }
   }
 
-  cudaStream_t stream = runtime::getCurrentCUDAStream();
+  hipStream_t stream = runtime::getCurrentCUDAStream();
   for (dgl_type_t etype = 0; etype < ufeat_ntids.size(); ++etype) {
     const dgl_type_t src_id = ufeat_ntids[etype];
     const dgl_type_t dst_id = out_ntids[etype];
@@ -128,7 +128,7 @@ void SpMMCsrHetero(
           cusparse_available<DType, IdType>(more_nnz)) {  // cusparse
         /* If CUDA is less than 11.0, put the output in trans_out for later
          * transposition */
-        DType* out = (CUDART_VERSION < 11000)
+        DType* out = CUSPARSE_IS_LEGACY
                          ? trans_out[dst_id]
                          : static_cast<DType*>((*vec_out)[dst_id]->data);
         CusparseCsrmm2Hetero<DType, IdType>(
@@ -214,14 +214,14 @@ template void SpMMCsrHetero<kDGLCUDA, int64_t, __half>(
     const std::vector<dgl_type_t>& ufeat_ntids,
     const std::vector<dgl_type_t>& out_ntids);
 #if BF16_ENABLED
-template void SpMMCsrHetero<kDGLCUDA, int32_t, __nv_bfloat16>(
+template void SpMMCsrHetero<kDGLCUDA, int32_t, __hip_bfloat16>(
     const std::string& op, const std::string& reduce, const BcastOff& bcast,
     const std::vector<CSRMatrix>& csr, const std::vector<NDArray>& ufeat,
     const std::vector<NDArray>& efeat, std::vector<NDArray>* out,
     std::vector<std::vector<NDArray>>* out_aux,
     const std::vector<dgl_type_t>& ufeat_ntids,
     const std::vector<dgl_type_t>& out_ntids);
-template void SpMMCsrHetero<kDGLCUDA, int64_t, __nv_bfloat16>(
+template void SpMMCsrHetero<kDGLCUDA, int64_t, __hip_bfloat16>(
     const std::string& op, const std::string& reduce, const BcastOff& bcast,
     const std::vector<CSRMatrix>& csr, const std::vector<NDArray>& ufeat,
     const std::vector<NDArray>& efeat, std::vector<NDArray>* out,

@@ -4,6 +4,7 @@ import backend as F
 import dgl
 import networkx as nx
 import numpy as np
+import pytest
 import scipy.sparse as ssp
 
 case_registry = defaultdict(list)
@@ -29,7 +30,7 @@ def get_cases(labels=None, exclude=[]):
         for case in case_registry[lbl]:
             if not any([l in exclude for l in case.__labels__]):
                 cases.add(case)
-    return [fn() for fn in cases]
+    return [pytest.param(fn(), id=f"{fn.__name__}<{','.join(fn.__labels__)}>") for fn in cases]
 
 
 @register_case(["bipartite", "zero-degree"])

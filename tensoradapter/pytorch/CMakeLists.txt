@@ -20,6 +20,10 @@ message(STATUS "Configuring for PyTorch ${TORCH_VER}")
 if(USE_CUDA)
   add_definitions(-DDGL_USE_CUDA)
 endif()
+if(USE_ROCM)
+  add_definitions(-DDGL_USE_ROCM)
+endif()
+
 
 set(Torch_DIR "${TORCH_PREFIX}/Torch")
 message(STATUS "Setting directory to ${Torch_DIR}")

@@ -123,7 +123,7 @@ class DGLContext(ctypes.Structure):
         7: "vulkan",
         8: "metal",
         9: "vpi",
-        10: "rocm",
+        10: "rocm", # NOTE(gcmn): Changing this to a 2 does not fix the unsupported device type code issue.
         11: "opengl",
         12: "ext_dev",
     }
@@ -154,6 +154,8 @@ class DGLContext(ctypes.Structure):
 
         inst = super(DGLContext, cls).__new__(DGLContext)
 
+        if device_type == 10:
+            device_type = 2
         inst.device_type = device_type
         inst.device_id = device_id
 

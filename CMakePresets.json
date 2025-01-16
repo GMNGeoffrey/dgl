@@ -1,0 +1,132 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "base",
+            "displayName": "Base",
+            "description": "Base preset with standard options. Over-specified for now",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "generator": "Ninja",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_C_FLAGS": "-Wno-deprecated -Wno-unneeded-internal-declaration -Wno-vla-cxx-extension",
+                "CMAKE_CXX_FLAGS": "-Wno-deprecated -Wno-unneeded-internal-declaration -Wno-vla-cxx-extension",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "$env{CC}",
+                "CMAKE_CXX_COMPILER": "$env{CXX}",
+                "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BUILD_TYPE": "dev",
+                "BUILD_CPP_TEST": "ON",
+                "BUILD_GRAPHBOLT": "OFF",
+                "BUILD_SPARSE": "ON",
+                "USE_LIBXSMM": "OFF",
+                "USE_OPENMP": "ON",
+                "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+                "Python3_FIND_VIRTUALENV": "ONLY"
+            },
+            "environment": {
+                "PATH": "${sourceDir}/.venv/bin:$penv{PATH}",
+                "VIRTUAL_ENV": "${sourceDir}/.venv"
+            }
+        },
+        {
+            "name": "rocm-6.4",
+            "displayName": "ROCM 6.4",
+            "description": "Build with ROCM 6.4 and clang-19",
+            "inherits": ["base"],
+            "cacheVariables": {
+                "USE_ROCM": "ON",
+                "CMAKE_PREFIX_PATH": "$env{ROCM_PATH}",
+                "CMAKE_HIP_FLAGS": "-Wno-deprecated",
+                "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+                "ROCM_WARN_TOOLCHAIN_VAR": "OFF"
+            },
+            "environment": {
+                "ROCM_PATH": "$penv{HOME}/rocm/opt/rocm",
+                "CC": "/usr/bin/clang-19",
+                "CXX": "/usr/bin/clang++-19"
+            }
+        },
+        {
+            "name": "rocm-6.4-asan",
+            "displayName": "ROCM 6.4 ASAN",
+            "description": "Build ASAN with ROCM 6.4 and clang-19",
+            "inherits": ["rocm-6.4"],
+            "cacheVariables": {
+                "CMAKE_C_FLAGS": "-Wno-deprecated -Wno-unneeded-internal-declaration -Wno-vla-cxx-extension -fsanitize=address -shared-libasan",
+                "CMAKE_CXX_FLAGS": "-Wno-deprecated -Wno-unneeded-internal-declaration -Wno-vla-cxx-extension -fsanitize=address -shared-libasan",
+                "CMAKE_HIP_FLAGS": "-Wno-deprecated -fsanitize=address -shared-libasan"
+
+            }
+        },
+        {
+            "name": "rocm-6.4-release",
+            "displayName": "ROCM 6.4 Release",
+            "description": "Build release with ROCM 6.4 and clang-19",
+            "inherits": ["rocm-6.4"],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "BUILD_TYPE": "release"
+            }
+        },
+        {
+            "name": "clang-19",
+            "displayName": "Clang",
+            "description": "Basic CPU build with Clang",
+            "inherits": ["base"],
+            "environment": {
+                "CC": "/usr/bin/clang-19",
+                "CXX": "/usr/bin/clang++-19"
+            }
+        },
+        {
+            "name": "clang-asan",
+            "displayName": "Clang ASAN",
+            "description": "Build cpu with ASAN and clang-19",
+            "inherits": ["clang-19"],
+            "cacheVariables": {
+                "CMAKE_C_FLAGS": "-Wno-deprecated -Wno-unneeded-internal-declaration -Wno-vla-cxx-extension -fsanitize=address -shared-libasan",
+                "CMAKE_CXX_FLAGS": "-Wno-deprecated -Wno-unneeded-internal-declaration -Wno-vla-cxx-extension -fsanitize=address -shared-libasan"
+            }
+        },
+        {
+            "name": "gcc",
+            "displayName": "GCC",
+            "description": "Basic CPU build with GCC",
+            "inherits": ["base"],
+            "environment": {
+                "CC": "/usr/bin/gcc",
+                "CXX": "/usr/bin/g++"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "rocm-6.4",
+            "configurePreset": "rocm-6.4"
+        },
+        {
+            "name": "rocm-6.4-asan",
+            "configurePreset": "rocm-6.4-asan"
+        },
+        {
+            "name": "rocm-6.4-release",
+            "configurePreset": "rocm-6.4-release"
+        },
+        {
+            "name": "clang-19",
+            "configurePreset": "clang-19"
+        },
+        {
+            "name": "clang-asan",
+            "configurePreset": "clang-asan"
+        },
+        {
+            "name": "gcc",
+            "configurePreset": "gcc"
+        }
+    ]
+}

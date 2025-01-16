@@ -11,13 +11,6 @@ from dgl.ops import gather_mm, gsddmm, gspmm, segment_reduce
 from utils import parametrize_idtype
 from utils.graph_cases import get_cases
 
-# Set seeds to make tests fully reproducible.
-SEED = 12345  # random.randint(1, 99999)
-random.seed(SEED)
-np.random.seed(SEED)
-dgl.seed(SEED)
-F.seed(SEED)
-
 udf_msg = {
     "add": lambda edges: {"m": edges.src["x"] + edges.data["w"]},
     "sub": lambda edges: {"m": edges.src["x"] - edges.data["w"]},

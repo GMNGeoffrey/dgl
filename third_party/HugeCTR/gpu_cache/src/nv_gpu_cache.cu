@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*
  * Copyright (c) 2023, NVIDIA CORPORATION.
  *
@@ -14,7 +15,7 @@
  * limitations under the License.
  */
 
-#include <cooperative_groups.h>
+#include <hip/hip_cooperative_groups.h>
 
 #include <nv_gpu_cache.hpp>
 
@@ -29,9 +30,17 @@ __forceinline__ __device__ long long atomicAdd(long long* address, long long val
   return (long long)atomicAdd((unsigned long long*)address, (unsigned long long)val);
 }
 
+// /.../dgl/third_party/HugeCTR/gpu_cache/src/nv_gpu_cache.cu:33:42: error: redefinition of 'atomicAdd'
+//    33 | __forceinline__ __device__ unsigned long atomicAdd(unsigned long* address, unsigned long val) {
+//       |                                          ^
+// /opt/rocm-6.2.3/lib/llvm/bin/../../../include/hip/amd_detail/amd_hip_atomic.h:240:15: note: previous definition is here
+//   240 | unsigned long atomicAdd(unsigned long* address, unsigned long val) {
+//       |               ^
+#ifndef DGL_USE_ROCM
 __forceinline__ __device__ unsigned long atomicAdd(unsigned long* address, unsigned long val) {
   return (unsigned long)atomicAdd((unsigned long long*)address, (unsigned long long)val);
 }
+#endif
 
 namespace gpu_cache {
 
@@ -327,7 +336,7 @@ __global__ void get_kernel(const key_type* d_keys, const size_t len, float* d_va
       key_type read_key = keys[next_set].set_[next_slab].slab_[lane_idx];
 
       // Compare the slab data with the target key
-      int found_lane = __ffs(warp_tile.ballot(read_key == next_key)) - 1;
+      int found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == next_key))) - 1;
 
       // If found, mark hit task, copy the founded data, the task is completed
       if (found_lane >= 0) {
@@ -472,7 +481,7 @@ __global__ void get_kernel(const key_type* d_keys, const size_t len, float* d_va
       key_type read_key = ((volatile key_type*)(keys[next_set].set_[next_slab].slab_))[lane_idx];
 
       // Compare the slab data with the target key
-      int found_lane = __ffs(warp_tile.ballot(read_key == next_key)) - 1;
+      int found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == next_key))) - 1;
 
       // If found, mark hit task, copy the founded data, the task is completed
       if (found_lane >= 0) {
@@ -518,7 +527,11 @@ __global__ void get_kernel(const key_type* d_keys, const size_t len, float* d_va
 
   // After warp_tile complete the working queue, save the result for output
   // First thread of the warp_tile accumulate the missing length to global variable
-  size_t warp_position;
+
+  // TODO(Brium/brium-dgl#27): clang miscompiles if this isn't initialized even
+  // though the shfl instructions are marked with maybe_undef. Figure out
+  // whether this is indeed a clang bug and remove this initialization.
+  size_t warp_position = 0;
   if (lane_idx == 0) {
     warp_position = atomicAdd(d_missing_len, (size_t)warp_missing_counter);
   }
@@ -636,7 +649,7 @@ __global__ void insert_replace_kernel(const key_type* d_keys, const float* d_val
       key_type read_key = keys[next_set].set_[next_slab].slab_[lane_idx];
 
       // Compare the slab data with the target key
-      int found_lane = __ffs(warp_tile.ballot(read_key == next_key)) - 1;
+      int found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == next_key))) - 1;
 
       // If found target key, the insertion/replace is no longer needed.
       // Refresh the slot, the task is completed
@@ -653,7 +666,7 @@ __global__ void insert_replace_kernel(const key_type* d_keys, const float* d_val
 
       // Compare the slab data with empty key.
       // If found empty key, do insertion,the task is complete
-      found_lane = __ffs(warp_tile.ballot(read_key == empty_key)) - 1;
+      found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == empty_key))) - 1;
       if (found_lane >= 0) {
         size_t found_offset = (next_set * set_associativity + next_slab) * warp_size + found_lane;
 
@@ -795,7 +808,7 @@ __global__ void insert_replace_kernel(const key_type* d_keys, const float* d_val
       key_type read_key = ((volatile key_type*)(keys[next_set].set_[next_slab].slab_))[lane_idx];
 
       // Compare the slab data with the target key
-      int found_lane = __ffs(warp_tile.ballot(read_key == next_key)) - 1;
+      int found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == next_key))) - 1;
 
       // If found target key, the insertion/replace is no longer needed.
       // Refresh the slot, the task is completed
@@ -812,7 +825,7 @@ __global__ void insert_replace_kernel(const key_type* d_keys, const float* d_val
 
       // Compare the slab data with empty key.
       // If found empty key, do insertion,the task is complete
-      found_lane = __ffs(warp_tile.ballot(read_key == empty_key)) - 1;
+      found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == empty_key))) - 1;
       if (found_lane >= 0) {
         size_t found_offset = (next_set * set_associativity + next_slab) * warp_size + found_lane;
 
@@ -925,7 +938,7 @@ __global__ void update_kernel(const key_type* d_keys, const size_t len, const fl
       key_type read_key = keys[next_set].set_[next_slab].slab_[lane_idx];
 
       // Compare the slab data with the target key
-      int found_lane = __ffs(warp_tile.ballot(read_key == next_key)) - 1;
+      int found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == next_key))) - 1;
 
       // If found, mark hit task, update the value, the task is completed
       if (found_lane >= 0) {
@@ -1035,7 +1048,7 @@ __global__ void update_kernel(const key_type* d_keys, const size_t len, const fl
       key_type read_key = ((volatile key_type*)(keys[next_set].set_[next_slab].slab_))[lane_idx];
 
       // Compare the slab data with the target key
-      int found_lane = __ffs(warp_tile.ballot(read_key == next_key)) - 1;
+      int found_lane = __ffs(static_cast<unsigned int>(warp_tile.ballot(read_key == next_key))) - 1;
 
       // If found, mark hit task, update the value, the task is completed
       if (found_lane >= 0) {
@@ -1246,34 +1259,35 @@ gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, s
     printf("Error: Invalid value for set_associativity.\n");
     return;
   }
-  if (warp_size != 1 && warp_size != 2 && warp_size != 4 && warp_size != 8 && warp_size != 16 &&
-      warp_size != 32) {
+  // TODO(Brium/brium-dgl#25): Determine maximum allowable size based on warp size at runtime.
+  if (warp_size != 1 && warp_size != 2 && warp_size != 4 && warp_size != 8 &&
+      warp_size != 16 && warp_size != 32 && warp_size != 64) {
     printf("Error: Invalid value for warp_size.\n");
     return;
   }
 
   // Get the current CUDA dev
-  CUDA_CHECK(cudaGetDevice(&dev_));
+  CUDA_CHECK(hipGetDevice(&dev_));
 
   // Calculate # of slot
   num_slot_ = capacity_in_set_ * set_associativity * warp_size;
 
   // Allocate GPU memory for cache
-  CUDA_CHECK(cudaMalloc((void**)&keys_, sizeof(slabset) * capacity_in_set_));
-  CUDA_CHECK(cudaMalloc((void**)&vals_, sizeof(float) * embedding_vec_size_ * num_slot_));
-  CUDA_CHECK(cudaMalloc((void**)&slot_counter_, sizeof(ref_counter_type) * num_slot_));
-  CUDA_CHECK(cudaMalloc((void**)&global_counter_, sizeof(atomic_ref_counter_type)));
+  CUDA_CHECK(hipMalloc((void**)&keys_, sizeof(slabset) * capacity_in_set_));
+  CUDA_CHECK(hipMalloc((void**)&vals_, sizeof(float) * embedding_vec_size_ * num_slot_));
+  CUDA_CHECK(hipMalloc((void**)&slot_counter_, sizeof(ref_counter_type) * num_slot_));
+  CUDA_CHECK(hipMalloc((void**)&global_counter_, sizeof(atomic_ref_counter_type)));
 
   // Allocate GPU memory for set mutex
-  CUDA_CHECK(cudaMalloc((void**)&set_mutex_, sizeof(mutex) * capacity_in_set_));
+  CUDA_CHECK(hipMalloc((void**)&set_mutex_, sizeof(mutex) * capacity_in_set_));
 
   // Initialize the cache, set all entry to unused <K,V>
   init_cache<<<((num_slot_ - 1) / BLOCK_SIZE_) + 1, BLOCK_SIZE_>>>(
       keys_, slot_counter_, global_counter_, num_slot_, empty_key, set_mutex_, capacity_in_set_);
 
   // Wait for initialization to finish
-  CUDA_CHECK(cudaStreamSynchronize(0));
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipStreamSynchronize(0));
+  CUDA_CHECK(hipGetLastError());
 }
 #else
 template <typename key_type, typename ref_counter_type, key_type empty_key, int set_associativity,
@@ -1294,34 +1308,35 @@ gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, s
     printf("Error: Invalid value for set_associativity.\n");
     return;
   }
-  if (warp_size != 1 && warp_size != 2 && warp_size != 4 && warp_size != 8 && warp_size != 16 &&
-      warp_size != 32) {
+  // TODO(Brium/brium-dgl#25): Determine maximum allowable size based on warp size at runtime.
+  if (warp_size != 1 && warp_size != 2 && warp_size != 4 && warp_size != 8 &&
+      warp_size != 16 && warp_size != 32 && warp_size != 64) {
     printf("Error: Invalid value for warp_size.\n");
     return;
   }
 
   // Get the current CUDA dev
-  CUDA_CHECK(cudaGetDevice(&dev_));
+  CUDA_CHECK(hipGetDevice(&dev_));
 
   // Calculate # of slot
   num_slot_ = capacity_in_set_ * set_associativity * warp_size;
 
   // Allocate GPU memory for cache
-  CUDA_CHECK(cudaMalloc((void**)&keys_, sizeof(slabset) * capacity_in_set_));
-  CUDA_CHECK(cudaMalloc((void**)&vals_, sizeof(float) * embedding_vec_size_ * num_slot_));
-  CUDA_CHECK(cudaMalloc((void**)&slot_counter_, sizeof(ref_counter_type) * num_slot_));
-  CUDA_CHECK(cudaMalloc((void**)&global_counter_, sizeof(ref_counter_type)));
+  CUDA_CHECK(hipMalloc((void**)&keys_, sizeof(slabset) * capacity_in_set_));
+  CUDA_CHECK(hipMalloc((void**)&vals_, sizeof(float) * embedding_vec_size_ * num_slot_));
+  CUDA_CHECK(hipMalloc((void**)&slot_counter_, sizeof(ref_counter_type) * num_slot_));
+  CUDA_CHECK(hipMalloc((void**)&global_counter_, sizeof(ref_counter_type)));
 
   // Allocate GPU memory for set mutex
-  CUDA_CHECK(cudaMalloc((void**)&set_mutex_, sizeof(int) * capacity_in_set_));
+  CUDA_CHECK(hipMalloc((void**)&set_mutex_, sizeof(int) * capacity_in_set_));
 
   // Initialize the cache, set all entry to unused <K,V>
   init_cache<<<((num_slot_ - 1) / BLOCK_SIZE_) + 1, BLOCK_SIZE_>>>(
       keys_, slot_counter_, global_counter_, num_slot_, empty_key, set_mutex_, capacity_in_set_);
 
   // Wait for initialization to finish
-  CUDA_CHECK(cudaStreamSynchronize(0));
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipStreamSynchronize(0));
+  CUDA_CHECK(hipGetLastError());
 }
 #endif
 
@@ -1340,15 +1355,15 @@ gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, s
   destruct_kernel<<<((capacity_in_set_ - 1) / BLOCK_SIZE_) + 1, BLOCK_SIZE_>>>(
       global_counter_, set_mutex_, capacity_in_set_);
   // Wait for destruction to finish
-  CUDA_CHECK(cudaStreamSynchronize(0));
+  CUDA_CHECK(hipStreamSynchronize(0));
 
   // Free GPU memory for cache
-  CUDA_CHECK(cudaFree(keys_));
-  CUDA_CHECK(cudaFree(vals_));
-  CUDA_CHECK(cudaFree(slot_counter_));
-  CUDA_CHECK(cudaFree(global_counter_));
+  CUDA_CHECK(hipFree(keys_));
+  CUDA_CHECK(hipFree(vals_));
+  CUDA_CHECK(hipFree(slot_counter_));
+  CUDA_CHECK(hipFree(global_counter_));
   // Free GPU memory for set mutex
-  CUDA_CHECK(cudaFree(set_mutex_));
+  CUDA_CHECK(hipFree(set_mutex_));
 }
 #else
 template <typename key_type, typename ref_counter_type, key_type empty_key, int set_associativity,
@@ -1362,12 +1377,12 @@ gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, s
   dev_restorer.check_device(dev_);
 
   // Free GPU memory for cache
-  CUDA_CHECK(cudaFree(keys_));
-  CUDA_CHECK(cudaFree(vals_));
-  CUDA_CHECK(cudaFree(slot_counter_));
-  CUDA_CHECK(cudaFree(global_counter_));
+  CUDA_CHECK(hipFree(keys_));
+  CUDA_CHECK(hipFree(vals_));
+  CUDA_CHECK(hipFree(slot_counter_));
+  CUDA_CHECK(hipFree(global_counter_));
   // Free GPU memory for set mutex
-  CUDA_CHECK(cudaFree(set_mutex_));
+  CUDA_CHECK(hipFree(set_mutex_));
 }
 #endif
 
@@ -1377,7 +1392,7 @@ template <typename key_type, typename ref_counter_type, key_type empty_key, int 
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Query(const key_type* d_keys, const size_t len, float* d_values,
                                    uint64_t* d_missing_index, key_type* d_missing_keys,
-                                   size_t* d_missing_len, cudaStream_t stream,
+                                   size_t* d_missing_len, hipStream_t stream,
                                    const size_t task_per_warp_tile) {
   // Device Restorer
   nv::CudaDeviceRestorer dev_restorer;
@@ -1387,7 +1402,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
   // Check if it is a valid query
   if (len == 0) {
     // Set the d_missing_len to 0 before return
-    CUDA_CHECK(cudaMemsetAsync(d_missing_len, 0, sizeof(size_t), stream));
+    CUDA_CHECK(hipMemsetAsync(d_missing_len, 0, sizeof(size_t), stream));
     return;
   }
 
@@ -1407,7 +1422,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
       task_per_warp_tile);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #else
 template <typename key_type, typename ref_counter_type, key_type empty_key, int set_associativity,
@@ -1415,7 +1430,7 @@ template <typename key_type, typename ref_counter_type, key_type empty_key, int 
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Query(const key_type* d_keys, const size_t len, float* d_values,
                                    uint64_t* d_missing_index, key_type* d_missing_keys,
-                                   size_t* d_missing_len, cudaStream_t stream,
+                                   size_t* d_missing_len, hipStream_t stream,
                                    const size_t task_per_warp_tile) {
   // Device Restorer
   nv::CudaDeviceRestorer dev_restorer;
@@ -1425,7 +1440,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
   // Check if it is a valid query
   if (len == 0) {
     // Set the d_missing_len to 0 before return
-    CUDA_CHECK(cudaMemsetAsync(d_missing_len, 0, sizeof(size_t), stream));
+    CUDA_CHECK(hipMemsetAsync(d_missing_len, 0, sizeof(size_t), stream));
     return;
   }
 
@@ -1445,7 +1460,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
       task_per_warp_tile);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #endif
 
@@ -1454,7 +1469,7 @@ template <typename key_type, typename ref_counter_type, key_type empty_key, int 
           int warp_size, typename set_hasher, typename slab_hasher>
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Replace(const key_type* d_keys, const size_t len,
-                                     const float* d_values, cudaStream_t stream,
+                                     const float* d_values, hipStream_t stream,
                                      const size_t task_per_warp_tile) {
   // Check if it is a valid replacement
   if (len == 0) {
@@ -1477,14 +1492,14 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
                                               capacity_in_set_, task_per_warp_tile);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #else
 template <typename key_type, typename ref_counter_type, key_type empty_key, int set_associativity,
           int warp_size, typename set_hasher, typename slab_hasher>
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Replace(const key_type* d_keys, const size_t len,
-                                     const float* d_values, cudaStream_t stream,
+                                     const float* d_values, hipStream_t stream,
                                      const size_t task_per_warp_tile) {
   // Check if it is a valid replacement
   if (len == 0) {
@@ -1506,7 +1521,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
       global_counter_, capacity_in_set_, task_per_warp_tile);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #endif
 
@@ -1515,7 +1530,7 @@ template <typename key_type, typename ref_counter_type, key_type empty_key, int 
           int warp_size, typename set_hasher, typename slab_hasher>
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Update(const key_type* d_keys, const size_t len, const float* d_values,
-                                    cudaStream_t stream, const size_t task_per_warp_tile) {
+                                    hipStream_t stream, const size_t task_per_warp_tile) {
   // Check if it is a valid update request
   if (len == 0) {
     return;
@@ -1535,14 +1550,14 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
       task_per_warp_tile);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #else
 template <typename key_type, typename ref_counter_type, key_type empty_key, int set_associativity,
           int warp_size, typename set_hasher, typename slab_hasher>
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Update(const key_type* d_keys, const size_t len, const float* d_values,
-                                    cudaStream_t stream, const size_t task_per_warp_tile) {
+                                    hipStream_t stream, const size_t task_per_warp_tile) {
   // Check if it is a valid update request
   if (len == 0) {
     return;
@@ -1562,7 +1577,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
                                               task_per_warp_tile);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #endif
 
@@ -1572,7 +1587,7 @@ template <typename key_type, typename ref_counter_type, key_type empty_key, int 
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Dump(key_type* d_keys, size_t* d_dump_counter,
                                   const size_t start_set_index, const size_t end_set_index,
-                                  cudaStream_t stream) {
+                                  hipStream_t stream) {
   // Check if it is a valid dump request
   if (start_set_index >= capacity_in_set_) {
     printf("Error: Invalid value for start_set_index. Nothing dumped.\n");
@@ -1589,7 +1604,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
   dev_restorer.check_device(dev_);
 
   // Set the global counter to 0 first
-  CUDA_CHECK(cudaMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
+  CUDA_CHECK(hipMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
 
   // Dump keys from the cache
   const size_t grid_size =
@@ -1599,7 +1614,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
                                               start_set_index, end_set_index);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #else
 template <typename key_type, typename ref_counter_type, key_type empty_key, int set_associativity,
@@ -1607,7 +1622,7 @@ template <typename key_type, typename ref_counter_type, key_type empty_key, int 
 void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_size, set_hasher,
                slab_hasher>::Dump(key_type* d_keys, size_t* d_dump_counter,
                                   const size_t start_set_index, const size_t end_set_index,
-                                  cudaStream_t stream) {
+                                  hipStream_t stream) {
   // Check if it is a valid dump request
   if (start_set_index >= capacity_in_set_) {
     printf("Error: Invalid value for start_set_index. Nothing dumped.\n");
@@ -1624,7 +1639,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
   dev_restorer.check_device(dev_);
 
   // Set the global counter to 0 first
-  CUDA_CHECK(cudaMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
+  CUDA_CHECK(hipMemsetAsync(d_dump_counter, 0, sizeof(size_t), stream));
 
   // Dump keys from the cache
   const size_t grid_size =
@@ -1634,7 +1649,7 @@ void gpu_cache<key_type, ref_counter_type, empty_key, set_associativity, warp_si
                                               start_set_index, end_set_index);
 
   // Check for GPU error before return
-  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(hipGetLastError());
 }
 #endif
 

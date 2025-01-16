@@ -24,11 +24,13 @@ os.environ["DGLBACKEND"] = "pytorch"
 
 import dgl
 import dgl.data
+from dgl.nn import SAGEConv
 import numpy as np
 import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 
 ######################################################################
 # Overview of Link Prediction with GNN
@@ -71,76 +73,8 @@ import torch.nn.functional as F
 # first loads the Cora dataset.
 #
 
+SEED = 1337
 
-dataset = dgl.data.CoraGraphDataset()
-g = dataset[0]
-
-
-######################################################################
-# Prepare training and testing sets
-# ---------------------------------
-#
-# This tutorial randomly picks 10% of the edges for positive examples in
-# the test set, and leave the rest for the training set. It then samples
-# the same number of edges for negative examples in both sets.
-#
-
-# Split edge set for training and testing
-u, v = g.edges()
-
-eids = np.arange(g.num_edges())
-eids = np.random.permutation(eids)
-test_size = int(len(eids) * 0.1)
-train_size = g.num_edges() - test_size
-test_pos_u, test_pos_v = u[eids[:test_size]], v[eids[:test_size]]
-train_pos_u, train_pos_v = u[eids[test_size:]], v[eids[test_size:]]
-
-# Find all negative edges and split them for training and testing
-adj = sp.coo_matrix((np.ones(len(u)), (u.numpy(), v.numpy())))
-adj_neg = 1 - adj.todense() - np.eye(g.num_nodes())
-neg_u, neg_v = np.where(adj_neg != 0)
-
-neg_eids = np.random.choice(len(neg_u), g.num_edges())
-test_neg_u, test_neg_v = (
-    neg_u[neg_eids[:test_size]],
-    neg_v[neg_eids[:test_size]],
-)
-train_neg_u, train_neg_v = (
-    neg_u[neg_eids[test_size:]],
-    neg_v[neg_eids[test_size:]],
-)
-
-
-######################################################################
-# When training, you will need to remove the edges in the test set from
-# the original graph. You can do this via ``dgl.remove_edges``.
-#
-# .. note::
-#
-#    ``dgl.remove_edges`` works by creating a subgraph from the
-#    original graph, resulting in a copy and therefore could be slow for
-#    large graphs. If so, you could save the training and test graph to
-#    disk, as you would do for preprocessing.
-#
-
-train_g = dgl.remove_edges(g, eids[:test_size])
-
-
-######################################################################
-# Define a GraphSAGE model
-# ------------------------
-#
-# This tutorial builds a model consisting of two
-# `GraphSAGE <https://arxiv.org/abs/1706.02216>`__ layers, each computes
-# new node representations by averaging neighbor information. DGL provides
-# ``dgl.nn.SAGEConv`` that conveniently creates a GraphSAGE layer.
-#
-
-from dgl.nn import SAGEConv
-
-
-# ----------- 2. create model -------------- #
-# build a two-layer GraphSAGE model
 class GraphSAGE(nn.Module):
     def __init__(self, in_feats, h_feats):
         super(GraphSAGE, self).__init__()
@@ -152,62 +86,6 @@ class GraphSAGE(nn.Module):
         h = F.relu(h)
         h = self.conv2(g, h)
         return h
-
-
-######################################################################
-# The model then predicts the probability of existence of an edge by
-# computing a score between the representations of both incident nodes
-# with a function (e.g. an MLP or a dot product), which you will see in
-# the next section.
-#
-# .. math::
-#
-#
-#    \hat{y}_{u\sim v} = f(h_u, h_v)
-#
-
-
-######################################################################
-# Positive graph, negative graph, and ``apply_edges``
-# ---------------------------------------------------
-#
-# In previous tutorials you have learned how to compute node
-# representations with a GNN. However, link prediction requires you to
-# compute representation of *pairs of nodes*.
-#
-# DGL recommends you to treat the pairs of nodes as another graph, since
-# you can describe a pair of nodes with an edge. In link prediction, you
-# will have a *positive graph* consisting of all the positive examples as
-# edges, and a *negative graph* consisting of all the negative examples.
-# The *positive graph* and the *negative graph* will contain the same set
-# of nodes as the original graph.  This makes it easier to pass node
-# features among multiple graphs for computation.  As you will see later,
-# you can directly feed the node representations computed on the entire
-# graph to the positive and the negative graphs for computing pair-wise
-# scores.
-#
-# The following code constructs the positive graph and the negative graph
-# for the training set and the test set respectively.
-#
-
-train_pos_g = dgl.graph((train_pos_u, train_pos_v), num_nodes=g.num_nodes())
-train_neg_g = dgl.graph((train_neg_u, train_neg_v), num_nodes=g.num_nodes())
-
-test_pos_g = dgl.graph((test_pos_u, test_pos_v), num_nodes=g.num_nodes())
-test_neg_g = dgl.graph((test_neg_u, test_neg_v), num_nodes=g.num_nodes())
-
-
-######################################################################
-# The benefit of treating the pairs of nodes as a graph is that you can
-# use the ``DGLGraph.apply_edges`` method, which conveniently computes new
-# edge features based on the incident nodes’ features and the original
-# edge features (if applicable).
-#
-# DGL provides a set of optimized builtin functions to compute new
-# edge features based on the original node/edge features. For example,
-# ``dgl.function.u_dot_v`` computes a dot product of the incident nodes’
-# representations for each edge.
-#
 
 import dgl.function as fn
 
@@ -221,13 +99,6 @@ class DotPredictor(nn.Module):
             g.apply_edges(fn.u_dot_v("h", "h", "score"))
             # u_dot_v returns a 1-element vector for each edge so you need to squeeze it.
             return g.edata["score"][:, 0]
-
-
-######################################################################
-# You can also write your own function if it is complex.
-# For instance, the following module produces a scalar score on each edge
-# by concatenating the incident nodes’ features and passing it to an MLP.
-#
 
 
 class MLPPredictor(nn.Module):
@@ -262,48 +133,11 @@ class MLPPredictor(nn.Module):
             g.apply_edges(self.apply_edges)
             return g.edata["score"]
 
-
-######################################################################
-# .. note::
-#
-#    The builtin functions are optimized for both speed and memory.
-#    We recommend using builtin functions whenever possible.
-#
-# .. note::
-#
-#    If you have read the :doc:`message passing
-#    tutorial <3_message_passing>`, you will notice that the
-#    argument ``apply_edges`` takes has exactly the same form as a message
-#    function in ``update_all``.
-#
-
-
-######################################################################
-# Training loop
-# -------------
-#
-# After you defined the node representation computation and the edge score
-# computation, you can go ahead and define the overall model, loss
-# function, and evaluation metric.
-#
-# The loss function is simply binary cross entropy loss.
-#
-# .. math::
-#
-#
-#    \mathcal{L} = -\sum_{u\sim v\in \mathcal{D}}\left( y_{u\sim v}\log(\hat{y}_{u\sim v}) + (1-y_{u\sim v})\log(1-\hat{y}_{u\sim v})) \right)
-#
-# The evaluation metric in this tutorial is AUC.
-#
-
-model = GraphSAGE(train_g.ndata["feat"].shape[1], 16)
-# You can replace DotPredictor with MLPPredictor.
-# pred = MLPPredictor(16)
-pred = DotPredictor()
+from sklearn.metrics import roc_auc_score
 
 
 def compute_loss(pos_score, neg_score):
-    scores = torch.cat([pos_score, neg_score])
+    scores = torch.cat([pos_score, neg_score]).cpu()
     labels = torch.cat(
         [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
     )
@@ -311,54 +145,283 @@ def compute_loss(pos_score, neg_score):
 
 
 def compute_auc(pos_score, neg_score):
-    scores = torch.cat([pos_score, neg_score]).numpy()
+    scores = torch.cat([pos_score, neg_score]).cpu().numpy()
     labels = torch.cat(
         [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
-    ).numpy()
+    ).cpu().numpy()
     return roc_auc_score(labels, scores)
 
 
-######################################################################
-# The training loop goes as follows:
-#
-# .. note::
-#
-#    This tutorial does not include evaluation on a validation
-#    set. In practice you should save and evaluate the best model based on
-#    performance on the validation set.
-#
-
-# ----------- 3. set up loss and optimizer -------------- #
-# in this case, loss will in training loop
-optimizer = torch.optim.Adam(
-    itertools.chain(model.parameters(), pred.parameters()), lr=0.01
-)
-
-# ----------- 4. training -------------------------------- #
-all_logits = []
-for e in range(100):
-    # forward
-    h = model(train_g, train_g.ndata["feat"])
-    pos_score = pred(train_pos_g, h)
-    neg_score = pred(train_neg_g, h)
-    loss = compute_loss(pos_score, neg_score)
-
-    # backward
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    if e % 5 == 0:
-        print("In epoch {}, loss: {}".format(e, loss))
-
-# ----------- 5. check results ------------------------ #
-from sklearn.metrics import roc_auc_score
-
-with torch.no_grad():
-    pos_score = pred(test_pos_g, h)
-    neg_score = pred(test_neg_g, h)
-    print("AUC", compute_auc(pos_score, neg_score))
+def train(device='cpu'):
+    print(f"Training on {device}")
+    torch.manual_seed(SEED)
+    dataset = dgl.data.CoraGraphDataset()
+    g = dataset[0]
+    g = g.to(device)
 
 
-# Thumbnail credits: Link Prediction with Neo4j, Mark Needham
-# sphinx_gallery_thumbnail_path = '_static/blitz_4_link_predict.png'
+    ######################################################################
+    # Prepare training and testing sets
+    # ---------------------------------
+    #
+    # This tutorial randomly picks 10% of the edges for positive examples in
+    # the test set, and leave the rest for the training set. It then samples
+    # the same number of edges for negative examples in both sets.
+    #
+
+    # Split edge set for training and testing
+    u, v = g.edges()
+
+    eids = np.arange(g.num_edges())
+    eids = np.random.permutation(eids)
+    test_size = int(len(eids) * 0.1)
+    train_size = g.num_edges() - test_size
+    test_pos_u, test_pos_v = u[eids[:test_size]], v[eids[:test_size]]
+    train_pos_u, train_pos_v = u[eids[test_size:]], v[eids[test_size:]]
+
+    # Find all negative edges and split them for training and testing
+    adj = sp.coo_matrix((np.ones(len(u)), (u.cpu().numpy(), v.cpu().numpy())))
+    adj_neg = 1 - adj.todense() - np.eye(g.num_nodes())
+    neg_u, neg_v = np.where(adj_neg != 0)
+
+    neg_eids = np.random.choice(len(neg_u), g.num_edges())
+    neg_u = torch.from_numpy(neg_u).to(device)
+    neg_v = torch.from_numpy(neg_v).to(device)
+    test_neg_u, test_neg_v = (
+        neg_u[neg_eids[:test_size]],
+        neg_v[neg_eids[:test_size]],
+    )
+    train_neg_u, train_neg_v = (
+        neg_u[neg_eids[test_size:]],
+        neg_v[neg_eids[test_size:]],
+    )
+
+
+    ######################################################################
+    # When training, you will need to remove the edges in the test set from
+    # the original graph. You can do this via ``dgl.remove_edges``.
+    #
+    # .. note::
+    #
+    #    ``dgl.remove_edges`` works by creating a subgraph from the
+    #    original graph, resulting in a copy and therefore could be slow for
+    #    large graphs. If so, you could save the training and test graph to
+    #    disk, as you would do for preprocessing.
+    #
+
+    train_g = dgl.remove_edges(g, eids[:test_size])
+
+
+    ######################################################################
+    # Define a GraphSAGE model
+    # ------------------------
+    #
+    # This tutorial builds a model consisting of two
+    # `GraphSAGE <https://arxiv.org/abs/1706.02216>`__ layers, each computes
+    # new node representations by averaging neighbor information. DGL provides
+    # ``dgl.nn.SAGEConv`` that conveniently creates a GraphSAGE layer.
+    #
+
+
+
+    # ----------- 2. create model -------------- #
+    # build a two-layer GraphSAGE model
+
+
+    ######################################################################
+    # The model then predicts the probability of existence of an edge by
+    # computing a score between the representations of both incident nodes
+    # with a function (e.g. an MLP or a dot product), which you will see in
+    # the next section.
+    #
+    # .. math::
+    #
+    #
+    #    \hat{y}_{u\sim v} = f(h_u, h_v)
+    #
+
+
+    ######################################################################
+    # Positive graph, negative graph, and ``apply_edges``
+    # ---------------------------------------------------
+    #
+    # In previous tutorials you have learned how to compute node
+    # representations with a GNN. However, link prediction requires you to
+    # compute representation of *pairs of nodes*.
+    #
+    # DGL recommends you to treat the pairs of nodes as another graph, since
+    # you can describe a pair of nodes with an edge. In link prediction, you
+    # will have a *positive graph* consisting of all the positive examples as
+    # edges, and a *negative graph* consisting of all the negative examples.
+    # The *positive graph* and the *negative graph* will contain the same set
+    # of nodes as the original graph.  This makes it easier to pass node
+    # features among multiple graphs for computation.  As you will see later,
+    # you can directly feed the node representations computed on the entire
+    # graph to the positive and the negative graphs for computing pair-wise
+    # scores.
+    #
+    # The following code constructs the positive graph and the negative graph
+    # for the training set and the test set respectively.
+    #
+
+    train_pos_g = dgl.graph((train_pos_u, train_pos_v), num_nodes=g.num_nodes())
+    train_neg_g = dgl.graph((train_neg_u, train_neg_v), num_nodes=g.num_nodes())
+
+    test_pos_g = dgl.graph((test_pos_u, test_pos_v), num_nodes=g.num_nodes())
+    test_neg_g = dgl.graph((test_neg_u, test_neg_v), num_nodes=g.num_nodes())
+
+
+    ######################################################################
+    # The benefit of treating the pairs of nodes as a graph is that you can
+    # use the ``DGLGraph.apply_edges`` method, which conveniently computes new
+    # edge features based on the incident nodes’ features and the original
+    # edge features (if applicable).
+    #
+    # DGL provides a set of optimized builtin functions to compute new
+    # edge features based on the original node/edge features. For example,
+    # ``dgl.function.u_dot_v`` computes a dot product of the incident nodes’
+    # representations for each edge.
+    #
+
+
+    ######################################################################
+    # You can also write your own function if it is complex.
+    # For instance, the following module produces a scalar score on each edge
+    # by concatenating the incident nodes’ features and passing it to an MLP.
+    #
+
+
+ 
+
+    ######################################################################
+    # .. note::
+    #
+    #    The builtin functions are optimized for both speed and memory.
+    #    We recommend using builtin functions whenever possible.
+    #
+    # .. note::
+    #
+    #    If you have read the :doc:`message passing
+    #    tutorial <3_message_passing>`, you will notice that the
+    #    argument ``apply_edges`` takes has exactly the same form as a message
+    #    function in ``update_all``.
+    #
+
+
+    ######################################################################
+    # Training loop
+    # -------------
+    #
+    # After you defined the node representation computation and the edge score
+    # computation, you can go ahead and define the overall model, loss
+    # function, and evaluation metric.
+    #
+    # The loss function is simply binary cross entropy loss.
+    #
+    # .. math::
+    #
+    #
+    #    \mathcal{L} = -\sum_{u\sim v\in \mathcal{D}}\left( y_{u\sim v}\log(\hat{y}_{u\sim v}) + (1-y_{u\sim v})\log(1-\hat{y}_{u\sim v})) \right)
+    #
+    # The evaluation metric in this tutorial is AUC.
+    #
+
+    model = GraphSAGE(train_g.ndata["feat"].shape[1], 16).to(device)
+    # You can replace DotPredictor with MLPPredictor.
+    # pred = MLPPredictor(16)
+    pred = DotPredictor().to(device)
+
+
+
+
+
+    ######################################################################
+    # The training loop goes as follows:
+    #
+    # .. note::
+    #
+    #    This tutorial does not include evaluation on a validation
+    #    set. In practice you should save and evaluate the best model based on
+    #    performance on the validation set.
+    #
+
+    # ----------- 3. set up loss and optimizer -------------- #
+    # in this case, loss will in training loop
+    optimizer = torch.optim.Adam(
+        itertools.chain(model.parameters(), pred.parameters()), lr=0.01
+    )
+
+    # ----------- 4. training -------------------------------- #
+    for e in range(100):
+        # forward
+        h = model(train_g, train_g.ndata["feat"])
+        pos_score = pred(train_pos_g, h)
+        neg_score = pred(train_neg_g, h)
+        loss = compute_loss(pos_score, neg_score)
+
+        # backward
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if e % 5 == 0:
+            print("In epoch {}, loss: {}".format(e, loss))
+
+    # ----------- 5. check results ------------------------ #
+
+    with torch.no_grad():
+        pos_score = pred(test_pos_g, h)
+        neg_score = pred(test_neg_g, h)
+        print("AUC", compute_auc(pos_score, neg_score))
+
+    return model
+
+    # Thumbnail credits: Link Prediction with Neo4j, Mark Needham
+    # sphinx_gallery_thumbnail_path = '_static/blitz_4_link_predict.png'
+
+model_cpu = train()
+model_cpu_2 = train()
+
+model_gpu = train(f'cuda')
+
+
+CONTEXT = 4
+FULL_PRINT_LIMIT = 64
+torch.set_printoptions(linewidth=360)
+
+
+def compare_tensors(t1, t2, *args, **kwargs):
+    t1 = t1.cpu()
+    t2 = t2.cpu()
+    if t1.dtype != t2.dtype:
+        print("Dtypes don't match")
+        return False
+    if t1.shape != t2.shape:
+        print("Shapes don't match")
+        return False
+    if torch.allclose(t1, t2, *args, **kwargs):
+        return True
+    
+    print("Values don't match")
+    close = torch.isclose(t1, t2, *args, **kwargs).to(torch.int32)
+    first_diff_idx = torch.argmin(close)
+    el_count = t1.numel()
+    if el_count <= FULL_PRINT_LIMIT:
+        slice_idxs = slice(el_count)
+    else:
+        first_print_idx = max(first_diff_idx - CONTEXT, 0)
+        slice_idxs = slice(first_print_idx, first_print_idx+2*CONTEXT)
+    stack = torch.stack((torch.arange(el_count, dtype=t1.dtype), t1.flatten(), t2.flatten(), (t1-t2).flatten()))
+    print(f"First difference at {first_diff_idx}. idx, t1, t2, t1-t2")
+    print(stack[:, slice_idxs])
+    return False
+
+
+for p_cpu, p_gpu in zip(model_cpu.parameters(), model_gpu.parameters()):
+    assert p_cpu.data.device.type == 'cpu', f"{p_cpu.data.device}"
+    assert p_gpu.data.device.type == 'cuda', f"{p_gpu.data.device}"
+    if not compare_tensors(p_cpu.data, p_gpu.data, rtol=1e-3, atol=1e-3):
+        print("Parameter mismatch")
+        break
+else:
+    print("All params match")

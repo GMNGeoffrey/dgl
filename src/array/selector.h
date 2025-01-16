@@ -12,13 +12,13 @@ namespace dgl {
 
 namespace {
 
-#ifdef __CUDACC__
+#ifdef __HIPCC__
 #define DGLDEVICE __device__
 #define DGLINLINE __forceinline__
 #else
 #define DGLDEVICE
 #define DGLINLINE inline
-#endif  // __CUDACC__
+#endif  // __HIPCC__
 
 }  // namespace
 
@@ -31,7 +31,10 @@ template <int target>
 struct Selector {
   template <typename T>
   static DGLDEVICE DGLINLINE T Call(T src, T edge, T dst) {
+    // HIP gets upset and thinks a device function is calling a host function here.
+    #ifndef DGL_USE_ROCM
     LOG(INFO) << "Target " << target << " not recognized.";
+    #endif
     return src;
   }
 };

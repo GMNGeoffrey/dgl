@@ -27,13 +27,6 @@ from utils.graph_cases import (
     random_graph,
 )
 
-# Set seeds to make tests fully reproducible.
-SEED = 12345  # random.randint(1, 99999)
-random.seed(SEED)  # For networkx
-np.random.seed(SEED)  # For scipy
-dgl.seed(SEED)
-F.seed(SEED)
-
 tmp_buffer = io.BytesIO()
 
 
@@ -1592,7 +1585,6 @@ def test_hetero_embedding(out_dim):
 def test_gnnexplainer(g, idtype, out_dim):
     g = g.astype(idtype).to(F.ctx())
     feat = F.randn((g.num_nodes(), 5))
-
     class Model(th.nn.Module):
         def __init__(self, in_feats, out_feats, graph=False):
             super(Model, self).__init__()
@@ -1631,9 +1623,8 @@ def test_gnnexplainer(g, idtype, out_dim):
     explainer = nn.GNNExplainer(model, num_hops=1)
     feat_mask, edge_mask = explainer.explain_graph(g, feat)
 
-
 @pytest.mark.parametrize("g", get_cases(["hetero"], exclude=["zero-degree"]))
-@pytest.mark.parametrize("idtype", [F.int64])
+@pytest.mark.parametrize("idtype", [F.int64], ids=["int64"])
 @pytest.mark.parametrize("input_dim", [5])
 @pytest.mark.parametrize("output_dim", [1, 2])
 def test_heterognnexplainer(g, idtype, input_dim, output_dim):
@@ -1748,7 +1739,7 @@ def test_subgraphx(g, idtype, n_classes):
 
 
 @pytest.mark.parametrize("g", get_cases(["hetero"], exclude=["zero-degree"]))
-@pytest.mark.parametrize("idtype", [F.int64])
+@pytest.mark.parametrize("idtype", [F.int64], ids=["int64"])
 @pytest.mark.parametrize("input_dim", [5])
 @pytest.mark.parametrize("n_classes", [2])
 def test_heterosubgraphx(g, idtype, input_dim, n_classes):
@@ -1881,7 +1872,7 @@ def test_pgexplainer(g, idtype, n_classes):
 
 
 @pytest.mark.parametrize("g", get_cases(["hetero"]))
-@pytest.mark.parametrize("idtype", [F.int64])
+@pytest.mark.parametrize("idtype", [F.int64], ids=["int64"])
 @pytest.mark.parametrize("input_dim", [5])
 @pytest.mark.parametrize("n_classes", [2])
 def test_heteropgexplainer(g, idtype, input_dim, n_classes):

@@ -38,175 +38,181 @@ import torch.nn.functional as F
 # ------------
 #
 
-
-# Generate a synthetic dataset with 10000 graphs, ranging from 10 to 500 nodes.
-dataset = dgl.data.GINDataset("PROTEINS", self_loop=True)
-
-
-######################################################################
-# The dataset is a set of graphs, each with node features and a single
-# label. One can see the node feature dimensionality and the number of
-# possible graph categories of ``GINDataset`` objects in ``dim_nfeats``
-# and ``gclasses`` attributes.
-#
-
-print("Node feature dimensionality:", dataset.dim_nfeats)
-print("Number of graph categories:", dataset.gclasses)
+def train(device='cpu'):
+    torch.manual_seed(1337)
+    # Generate a synthetic dataset with 10000 graphs, ranging from 10 to 500 nodes.
+    dataset = dgl.data.GINDataset("PROTEINS", self_loop=True)
 
 
-from dgl.dataloading import GraphDataLoader
+    ######################################################################
+    # The dataset is a set of graphs, each with node features and a single
+    # label. One can see the node feature dimensionality and the number of
+    # possible graph categories of ``GINDataset`` objects in ``dim_nfeats``
+    # and ``gclasses`` attributes.
+    #
 
-######################################################################
-# Defining Data Loader
-# --------------------
-#
-# A graph classification dataset usually contains two types of elements: a
-# set of graphs, and their graph-level labels. Similar to an image
-# classification task, when the dataset is large enough, we need to train
-# with mini-batches. When you train a model for image classification or
-# language modeling, you will use a ``DataLoader`` to iterate over the
-# dataset. In DGL, you can use the ``GraphDataLoader``.
-#
-# You can also use various dataset samplers provided in
-# `torch.utils.data.sampler <https://pytorch.org/docs/stable/data.html#data-loading-order-and-sampler>`__.
-# For example, this tutorial creates a training ``GraphDataLoader`` and
-# test ``GraphDataLoader``, using ``SubsetRandomSampler`` to tell PyTorch
-# to sample from only a subset of the dataset.
-#
-
-from torch.utils.data.sampler import SubsetRandomSampler
-
-num_examples = len(dataset)
-num_train = int(num_examples * 0.8)
-
-train_sampler = SubsetRandomSampler(torch.arange(num_train))
-test_sampler = SubsetRandomSampler(torch.arange(num_train, num_examples))
-
-train_dataloader = GraphDataLoader(
-    dataset, sampler=train_sampler, batch_size=5, drop_last=False
-)
-test_dataloader = GraphDataLoader(
-    dataset, sampler=test_sampler, batch_size=5, drop_last=False
-)
+    print("Node feature dimensionality:", dataset.dim_nfeats)
+    print("Number of graph categories:", dataset.gclasses)
 
 
-######################################################################
-# You can try to iterate over the created ``GraphDataLoader`` and see what it
-# gives:
-#
+    from dgl.dataloading import GraphDataLoader
 
-it = iter(train_dataloader)
-batch = next(it)
-print(batch)
+    ######################################################################
+    # Defining Data Loader
+    # --------------------
+    #
+    # A graph classification dataset usually contains two types of elements: a
+    # set of graphs, and their graph-level labels. Similar to an image
+    # classification task, when the dataset is large enough, we need to train
+    # with mini-batches. When you train a model for image classification or
+    # language modeling, you will use a ``DataLoader`` to iterate over the
+    # dataset. In DGL, you can use the ``GraphDataLoader``.
+    #
+    # You can also use various dataset samplers provided in
+    # `torch.utils.data.sampler <https://pytorch.org/docs/stable/data.html#data-loading-order-and-sampler>`__.
+    # For example, this tutorial creates a training ``GraphDataLoader`` and
+    # test ``GraphDataLoader``, using ``SubsetRandomSampler`` to tell PyTorch
+    # to sample from only a subset of the dataset.
+    #
 
+    from torch.utils.data.sampler import SubsetRandomSampler
 
-######################################################################
-# As each element in ``dataset`` has a graph and a label, the
-# ``GraphDataLoader`` will return two objects for each iteration. The
-# first element is the batched graph, and the second element is simply a
-# label vector representing the category of each graph in the mini-batch.
-# Next, we’ll talked about the batched graph.
-#
-# A Batched Graph in DGL
-# ----------------------
-#
-# In each mini-batch, the sampled graphs are combined into a single bigger
-# batched graph via ``dgl.batch``. The single bigger batched graph merges
-# all original graphs as separately connected components, with the node
-# and edge features concatenated. This bigger graph is also a ``DGLGraph``
-# instance (so you can
-# still treat it as a normal ``DGLGraph`` object as in
-# `here <2_dglgraph.ipynb>`__). It however contains the information
-# necessary for recovering the original graphs, such as the number of
-# nodes and edges of each graph element.
-#
+    num_examples = len(dataset)
+    num_train = int(num_examples * 0.8)
 
-batched_graph, labels = batch
-print(
-    "Number of nodes for each graph element in the batch:",
-    batched_graph.batch_num_nodes(),
-)
-print(
-    "Number of edges for each graph element in the batch:",
-    batched_graph.batch_num_edges(),
-)
+    train_sampler = SubsetRandomSampler(torch.arange(num_train))
+    test_sampler = SubsetRandomSampler(torch.arange(num_train, num_examples))
 
-# Recover the original graph elements from the minibatch
-graphs = dgl.unbatch(batched_graph)
-print("The original graphs in the minibatch:")
-print(graphs)
+    train_dataloader = GraphDataLoader(
+        dataset, sampler=train_sampler, batch_size=5, drop_last=False
+    )
+    test_dataloader = GraphDataLoader(
+        dataset, sampler=test_sampler, batch_size=5, drop_last=False
+    )
 
 
-######################################################################
-# Define Model
-# ------------
-#
-# This tutorial will build a two-layer `Graph Convolutional Network
-# (GCN) <http://tkipf.github.io/graph-convolutional-networks/>`__. Each of
-# its layer computes new node representations by aggregating neighbor
-# information. If you have gone through the
-# :doc:`introduction <1_introduction>`, you will notice two
-# differences:
-#
-# -  Since the task is to predict a single category for the *entire graph*
-#    instead of for every node, you will need to aggregate the
-#    representations of all the nodes and potentially the edges to form a
-#    graph-level representation. Such process is more commonly referred as
-#    a *readout*. A simple choice is to average the node features of a
-#    graph with ``dgl.mean_nodes()``.
-#
-# -  The input graph to the model will be a batched graph yielded by the
-#    ``GraphDataLoader``. The readout functions provided by DGL can handle
-#    batched graphs so that they will return one representation for each
-#    minibatch element.
-#
+    ######################################################################
+    # You can try to iterate over the created ``GraphDataLoader`` and see what it
+    # gives:
+    #
 
-from dgl.nn import GraphConv
+    it = iter(train_dataloader)
+    batch = next(it)
+    print(batch)
 
 
-class GCN(nn.Module):
-    def __init__(self, in_feats, h_feats, num_classes):
-        super(GCN, self).__init__()
-        self.conv1 = GraphConv(in_feats, h_feats)
-        self.conv2 = GraphConv(h_feats, num_classes)
+    ######################################################################
+    # As each element in ``dataset`` has a graph and a label, the
+    # ``GraphDataLoader`` will return two objects for each iteration. The
+    # first element is the batched graph, and the second element is simply a
+    # label vector representing the category of each graph in the mini-batch.
+    # Next, we’ll talked about the batched graph.
+    #
+    # A Batched Graph in DGL
+    # ----------------------
+    #
+    # In each mini-batch, the sampled graphs are combined into a single bigger
+    # batched graph via ``dgl.batch``. The single bigger batched graph merges
+    # all original graphs as separately connected components, with the node
+    # and edge features concatenated. This bigger graph is also a ``DGLGraph``
+    # instance (so you can
+    # still treat it as a normal ``DGLGraph`` object as in
+    # `here <2_dglgraph.ipynb>`__). It however contains the information
+    # necessary for recovering the original graphs, such as the number of
+    # nodes and edges of each graph element.
+    #
 
-    def forward(self, g, in_feat):
-        h = self.conv1(g, in_feat)
-        h = F.relu(h)
-        h = self.conv2(g, h)
-        g.ndata["h"] = h
-        return dgl.mean_nodes(g, "h")
+    batched_graph, labels = batch
+    print(
+        "Number of nodes for each graph element in the batch:",
+        batched_graph.batch_num_nodes(),
+    )
+    print(
+        "Number of edges for each graph element in the batch:",
+        batched_graph.batch_num_edges(),
+    )
+
+    # Recover the original graph elements from the minibatch
+    graphs = dgl.unbatch(batched_graph)
+    print("The original graphs in the minibatch:")
+    print(graphs)
 
 
-######################################################################
-# Training Loop
-# -------------
-#
-# The training loop iterates over the training set with the
-# ``GraphDataLoader`` object and computes the gradients, just like
-# image classification or language modeling.
-#
+    ######################################################################
+    # Define Model
+    # ------------
+    #
+    # This tutorial will build a two-layer `Graph Convolutional Network
+    # (GCN) <http://tkipf.github.io/graph-convolutional-networks/>`__. Each of
+    # its layer computes new node representations by aggregating neighbor
+    # information. If you have gone through the
+    # :doc:`introduction <1_introduction>`, you will notice two
+    # differences:
+    #
+    # -  Since the task is to predict a single category for the *entire graph*
+    #    instead of for every node, you will need to aggregate the
+    #    representations of all the nodes and potentially the edges to form a
+    #    graph-level representation. Such process is more commonly referred as
+    #    a *readout*. A simple choice is to average the node features of a
+    #    graph with ``dgl.mean_nodes()``.
+    #
+    # -  The input graph to the model will be a batched graph yielded by the
+    #    ``GraphDataLoader``. The readout functions provided by DGL can handle
+    #    batched graphs so that they will return one representation for each
+    #    minibatch element.
+    #
 
-# Create the model with given dimensions
-model = GCN(dataset.dim_nfeats, 16, dataset.gclasses)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    from dgl.nn import GraphConv
 
-for epoch in range(20):
-    for batched_graph, labels in train_dataloader:
+
+    class GCN(nn.Module):
+        def __init__(self, in_feats, h_feats, num_classes):
+            super(GCN, self).__init__()
+            self.conv1 = GraphConv(in_feats, h_feats)
+            self.conv2 = GraphConv(h_feats, num_classes)
+
+        def forward(self, g, in_feat):
+            h = self.conv1(g, in_feat)
+            h = F.relu(h)
+            h = self.conv2(g, h)
+            g.ndata["h"] = h
+            return dgl.mean_nodes(g, "h")
+
+
+    ######################################################################
+    # Training Loop
+    # -------------
+    #
+    # The training loop iterates over the training set with the
+    # ``GraphDataLoader`` object and computes the gradients, just like
+    # image classification or language modeling.
+    #
+
+    # Create the model with given dimensions
+    model = GCN(dataset.dim_nfeats, 16, dataset.gclasses).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+    for epoch in range(20):
+        for batched_graph, labels in train_dataloader:
+            batched_graph = batched_graph.to(device)
+            labels = labels.to(device)
+            pred = model(batched_graph, batched_graph.ndata["attr"].float())
+            loss = F.cross_entropy(pred, labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+    num_correct = 0
+    num_tests = 0
+    for batched_graph, labels in test_dataloader:
+        batched_graph = batched_graph.to(device)
+        labels = labels.to(device)
         pred = model(batched_graph, batched_graph.ndata["attr"].float())
-        loss = F.cross_entropy(pred, labels)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        num_correct += (pred.argmax(1) == labels).sum().item()
+        num_tests += len(labels)
 
-num_correct = 0
-num_tests = 0
-for batched_graph, labels in test_dataloader:
-    pred = model(batched_graph, batched_graph.ndata["attr"].float())
-    num_correct += (pred.argmax(1) == labels).sum().item()
-    num_tests += len(labels)
-
-print("Test accuracy:", num_correct / num_tests)
+    print("Test accuracy:", num_correct / num_tests)
+    return model
 
 
 ######################################################################
@@ -221,3 +227,49 @@ print("Test accuracy:", num_correct / num_tests)
 
 # Thumbnail credits: DGL
 # sphinx_gallery_thumbnail_path = '_static/blitz_5_graph_classification.png'
+
+model_cpu = train()
+
+model_gpu = train(f'cuda')
+
+
+CONTEXT = 4
+FULL_PRINT_LIMIT = 64
+torch.set_printoptions(linewidth=360)
+
+
+def compare_tensors(t1, t2, *args, **kwargs):
+    t1 = t1.cpu()
+    t2 = t2.cpu()
+    if t1.dtype != t2.dtype:
+        print("Dtypes don't match")
+        return False
+    if t1.shape != t2.shape:
+        print("Shapes don't match")
+        return False
+    if torch.allclose(t1, t2, *args, **kwargs):
+        return True
+    
+    print("Values don't match")
+    close = torch.isclose(t1, t2, *args, **kwargs).to(torch.int32)
+    first_diff_idx = torch.argmin(close)
+    el_count = t1.numel()
+    if el_count <= FULL_PRINT_LIMIT:
+        slice_idxs = slice(el_count)
+    else:
+        first_print_idx = max(first_diff_idx - CONTEXT, 0)
+        slice_idxs = slice(first_print_idx, first_print_idx+2*CONTEXT)
+    stack = torch.stack((torch.arange(el_count, dtype=t1.dtype), t1.flatten(), t2.flatten(), (t1-t2).flatten()))
+    print(f"First difference at {first_diff_idx}. idx, t1, t2, t1-t2")
+    print(stack[:, slice_idxs])
+    return False
+
+
+for p_cpu, p_gpu in zip(model_cpu.parameters(), model_gpu.parameters()):
+    assert p_cpu.data.device.type == 'cpu', f"{p_cpu.data.device}"
+    assert p_gpu.data.device.type == 'cuda', f"{p_gpu.data.device}"
+    if not compare_tensors(p_cpu.data, p_gpu.data, rtol=1e-3, atol=1e-3):
+        print("Parameter mismatch")
+        break
+else:
+    print("All params match")

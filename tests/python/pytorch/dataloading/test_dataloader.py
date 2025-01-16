@@ -2,6 +2,7 @@ import os
 import unittest
 from collections.abc import Iterator, Mapping
 from functools import partial
+import tempfile
 
 import backend as F
 
@@ -37,15 +38,17 @@ def test_graph_dataloader(batch_size):
 @unittest.skipIf(os.name == "nt", reason="Do not support windows yet")
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_cluster_gcn(num_workers):
-    dataset = dgl.data.CoraFullDataset()
-    g = dataset[0]
-    sampler = dgl.dataloading.ClusterGCNSampler(g, 100)
-    dataloader = dgl.dataloading.DataLoader(
-        g, torch.arange(100), sampler, batch_size=4, num_workers=num_workers
-    )
-    assert len(dataloader) == 25
-    for i, sg in enumerate(dataloader):
-        pass
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = os.path.join(tmpdir, "cluster_gcn.pkl")
+        dataset = dgl.data.CoraFullDataset()
+        g = dataset[0]
+        sampler = dgl.dataloading.ClusterGCNSampler(g, 100, cache_path=cache_path)
+        dataloader = dgl.dataloading.DataLoader(
+            g, torch.arange(100), sampler, batch_size=4, num_workers=num_workers
+        )
+        assert len(dataloader) == 25
+        for i, sg in enumerate(dataloader):
+            pass
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
@@ -236,6 +239,7 @@ def test_ddp_dataloader_decompose_dataset(
         pytest.skip(
             "DDP dataloader needs sufficient GPUs for UVA and GPU sampling."
         )
+
     if mode != "cpu" and F.ctx() == F.cpu():
         pytest.skip("UVA and GPU sampling require a GPU.")
 

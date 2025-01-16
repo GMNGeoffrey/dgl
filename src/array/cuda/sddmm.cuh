@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /**
  *  Copyright (c) 2020 by Contributors
  * @file array/cuda/sddmm.cuh
@@ -85,7 +86,12 @@ namespace cuda {
     }                                                                    \
   } while (0)
 
+#ifdef __HIPCC__
+// HIP requires 64-bit mask
+constexpr unsigned long long full_mask = 0xffffffffffffffff;
+#else
 constexpr unsigned int full_mask = 0xffffffff;
+#endif
 
 /**
  * @brief CUDA kernel of g-SDDMM on Coo format.
@@ -275,7 +281,7 @@ void SDDMMCoo(
   const DType* lhs_data = lhs.Ptr<DType>();
   const DType* rhs_data = rhs.Ptr<DType>();
   DType* out_data = out.Ptr<DType>();
-  cudaStream_t stream = runtime::getCurrentCUDAStream();
+  hipStream_t stream = runtime::getCurrentCUDAStream();
 
   int64_t *lhs_off = nullptr, *rhs_off = nullptr;
   int64_t len = bcast.out_len, lhs_len = bcast.lhs_len, rhs_len = bcast.rhs_len;
@@ -337,7 +343,7 @@ void SDDMMCsr(
   const DType* lhs_data = lhs.Ptr<DType>();
   const DType* rhs_data = rhs.Ptr<DType>();
   DType* out_data = out.Ptr<DType>();
-  cudaStream_t stream = runtime::getCurrentCUDAStream();
+  hipStream_t stream = runtime::getCurrentCUDAStream();
   int64_t N = csr.num_rows, M = csr.num_cols, E = csr.indices->shape[0];
 
   int64_t *lhs_off = nullptr, *rhs_off = nullptr;
