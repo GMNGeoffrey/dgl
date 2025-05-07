@@ -1,0 +1,172 @@
+# Docker container for building and running DGL on AMD GPUs with ROCM. Includes
+# only the dependencies of DGL on ROCm, including the necessary compiler tools,
+# but does not include DGL itself.
+
+# The image creation here diverges from the way the other DGL images are built
+# because it inherits from the pytorch/rocm image, which has already made some
+# opinionated decisions about conda usage and installed PyTorch itself.
+
+# TODO: This image is quite large. Consider multistage builds.
+# See also https://github.com/ROCm/ROCm-docker/issues/120
+# I can't find the actual Dockerfile for this image, but it appears to inherit
+# from
+# https://github.com/pytorch/pytorch/blob/main/.ci/docker/ubuntu-rocm/Dockerfile
+# and then install PyTorch itself.
+FROM rocm/pytorch:rocm6.4_ubuntu22.04_py3.10_pytorch_release_2.6.0
+
+# Clean up base image 
+
+# The Ubuntu base image includes this configuration which avoids apt caching and
+# deletes caches that do somehow get created. This is probably a good default
+# for Docker, but since we're using external cache mounts we dont' want this.
+RUN rm /etc/apt/apt.conf.d/docker-clean
+
+# Setting DEBIAN_FRONTEND with ENV is actually discouraged because it is
+# unnecessary and carries forward to interactive usage of the container
+# (https://github.com/moby/moby/issues/4032#issuecomment-34597177). Set it back
+# to the default (https://www.debian.org/releases/stable/amd64/ch05s03.en.html).
+ENV DEBIAN_FRONTEND=newt
+
+# The rocm/pytorch image already has a Conda environment and it has been added
+# to the PATH but not really activated via Conda's own mechanisms. This seems to
+# not matter in practice and the image more or less behaves like Conda has been
+# activated except that Conda itself says that no environment is active. The
+# Conda environment was created as the user jenkins (I think for PyTorch CI),
+# but then the rocm/pytorch image has installed some packages as root there, so
+# we have to be root for the rest of the docker build also, even though it makes
+# pip complain.
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        --find-links https://download.pytorch.org/whl/torch_stable.html \
+        torcheval \
+        torchmetrics \
+        torch_geometric \
+        cython \
+        matplotlib \
+        # need networkx.random_labeled_tree
+        'networkx==3.4.2' \
+        nltk \
+        nose \
+        # Require a specific version of the next two to avoid silent pip
+        # dependency resolution failures.
+        'numba>=0.61' \
+        'numpy==1.26' \
+        ogb \
+        pandas \
+        psutil \
+        pydantic \
+        pytest \
+        pyyaml \
+        rdflib \
+        'requests[security]==2.28' \
+        scikit-learn \
+        scipy \
+        tqdm
+
+
+# Installing ccache here enables us to use it for compiling DGL (and other
+# things) later. The cache can be persisted in either a `RUN` step or `docker
+# run` via a bind mount (https://docs.docker.com/engine/storage/bind-mounts/).
+# The image already has sccache installed, but it's an ancient version that
+# wasn't properly caching very slow DGL compile steps. Upgrading to a new
+# version didn't work either, so I switched to ccache.
+ARG CCACHE_INSTALL_WORKDIR=/root/install-ccache
+WORKDIR "${CCACHE_INSTALL_WORKDIR}"
+RUN wget https://github.com/ccache/ccache/releases/download/v4.11.2/ccache-4.11.2-linux-x86_64.tar.xz \
+    && tar -xf ccache-4.11.2-linux-x86_64.tar.xz \
+    # The base image has already added /opt/cache/bin to the PATH.
+    && mv ccache-4.11.2-linux-x86_64/ccache /opt/cache/bin/ \
+    && rm -rf "${CCACHE_INSTALL_WORKDIR}"
+
+# We pick up the clang and clang++ that are bundled with ROCm. We need at least
+# version 19 for https://github.com/llvm/llvm-project/pull/93976 (which ROCm 6.4
+# ships with).
+ENV CC=/opt/rocm/llvm/bin/clang
+ENV CXX=/opt/rocm/llvm/bin/clang++
+
+# By default, build for all the CDNA architectures. The limitations here are:
+# - the architectures the base image builds PyTorch for
+# - the architectures that hipCollections supports
+#   (https://github.com/rocm/hipCollections/blob/b1cd36f600/CMakeLists.txt#L82)
+# - architectures that are OK with us hardcoding the wave size to 64 (which
+#   seems to exclude at least gfx1100).
+# I'm not really clear on the status of gfx940 and gfx941. I think they're
+# somehow older versions of CDNA3, but I'm unsure when you would need to use
+# them now. The base image doesn't build PyTorch for them though, so I'm leaving
+# them off.
+# HIP has a bunch of different variables it might use to decide which
+# architectures to use and honestly I'm not exactly clear on when each is used.
+# Some of them not being set causes warnings that are maybe false alarms, but
+# maybe not. We just try to set all of them. See
+# https://rocm.docs.amd.com/en/latest/conceptual/cmake-packages.html
+
+ARG GPU_TARGETS="gfx908;gfx90a;gfx942"
+# ARG is only scoped to this build, so we also declare with ENV. We want users
+# of the image to know what these were set to.
+ENV GPU_TARGETS="${GPU_TARGETS}"
+ENV PYTORCH_ROCM_ARCH="${GPU_TARGETS}"
+ENV AMDGPU_TARGETS="${GPU_TARGETS}"
+ENV CMAKE_HIP_ARCHITECTURES="${GPU_TARGETS}"
+
+# Gather additional or updated ROCm libraries
+ARG REBUILD_ROCM_LIBS_WORKDIR=/root/rebuild-rocm-libs
+WORKDIR "${REBUILD_ROCM_LIBS_WORKDIR}"
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    # We use environment variables rather than CMake defines because they affect
+    # the various sub-builds that DGL spawns without us having to manually
+    # thread that through. And we use `export` rather than `ENV` because we want
+    # to set them for this RUN step, but not spring them upon unwitting users of
+    # image.
+    export CMAKE_C_COMPILER_LAUNCHER=ccache \
+    export CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    export CMAKE_HIP_COMPILER_LAUNCHER=ccache \
+    # We later compile DGL with this sloppiness setting, so using it here to for
+    # consistency.
+    export CCACHE_SLOPPINESS=time_macros \
+    # Share the cache with builds that might be run as a different user.
+    # Everything running as docker basically has root anyways, so I don't think
+    # there are any (additional) security concerns.
+    export CCACHE_UMASK=000 \
+    # Rewrite paths under this directory to be relative, enabling more cache
+    # hits for builds in different directories.
+    export CCACHE_BASEDIR=/root \
+    # Write stats to a separate log so we can get the stats for just this build.
+    export CCACHE_STATSLOG="${REBUILD_ROCM_LIBS_WORKDIR}/ccache-stats.log" \
+    && (git clone https://github.com/tpopp/hipCUB.git && cd hipCUB && git checkout f342111197dd020f1c4210b16aa550b08992e97b \
+        && mkdir build && cd build \
+        && cmake -DGPU_TARGETS="${GPU_TARGETS}" -DAMDGPU_TARGETS="${AMDGPU_TARGETS}" -DCMAKE_HIP_ARCHITECTURES="${CMAKE_HIP_ARCHITECTURES}" \
+                -DCMAKE_INSTALL_PREFIX=/opt/rocm .. \
+        && make install) \
+    && (git clone https://github.com/ROCm/libhipcxx.git && cd libhipcxx && git checkout v2.2.0 \
+        && mkdir build && cd build \
+        && cmake -DGPU_TARGETS="${GPU_TARGETS}" -DAMDGPU_TARGETS="${AMDGPU_TARGETS}" -DCMAKE_HIP_ARCHITECTURES="${CMAKE_HIP_ARCHITECTURES}" \
+                -DCMAKE_INSTALL_PREFIX=/opt/rocm .. \
+        && make install ) \
+    && (git clone https://github.com/tpopp/hipCollections.git && cd hipCollections && git checkout 6e31da8fd309f229d28adde8583a30bb4efaf1b7 \
+        && mkdir build && cd build \
+        && cmake -DGPU_TARGETS="${GPU_TARGETS}" -DAMDGPU_TARGETS="${AMDGPU_TARGETS}" -DCMAKE_HIP_ARCHITECTURES="${CMAKE_HIP_ARCHITECTURES}" \
+                -DCMAKE_INSTALL_PREFIX=/opt/rocm -DINSTALL_CUCO=ON -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF .. \
+        && make install ) \
+    && (git clone https://github.com/tpopp/rocThrust.git && cd rocThrust && git checkout 613db9a025709fb18f2a676543a17850bd231b04 \
+        && mkdir build && cd build \
+        && cmake -DGPU_TARGETS="${GPU_TARGETS}" -DAMDGPU_TARGETS="${AMDGPU_TARGETS}" -DCMAKE_HIP_ARCHITECTURES="${CMAKE_HIP_ARCHITECTURES}" \
+                -DCMAKE_INSTALL_PREFIX=/opt/rocm .. \
+        && make install ) \
+    && ccache -vvv --show-log-stats \
+    && rm -rf "${REBUILD_ROCM_LIBS_WORKDIR}"
+
+
+ARG PATCH_PYTORCH_WORKDIR=/root/patch-pytorch
+WORKDIR "${PATCH_PYTORCH_WORKDIR}"
+# Torch 2.6 broke torch.compile with clang due to a regex bug. Patch in the fix
+RUN wget -O pytorch_clang.patch https://github.com/pytorch/pytorch/commit/33ff96b3f974de308ecc261fb251ad58bb2e56b7.patch \
+    && cd "$(python3 -c 'import site; print(site.getsitepackages()[0])')" \
+    && patch -p1 < "${PATCH_PYTORCH_WORKDIR}/pytorch_clang.patch" \
+    && rm -rf "${PATCH_PYTORCH_WORKDIR}"
+
+
+WORKDIR /
+
+# The ROCM backend is only tested for pytorch.
+ENV DGLBACKEND=pytorch
